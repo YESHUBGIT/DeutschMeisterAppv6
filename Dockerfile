@@ -35,6 +35,8 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/scripts/docker-entrypoint.sh ./scripts/docker-entrypoint.sh
 
+RUN chmod +x /app/scripts/docker-entrypoint.sh
+
 EXPOSE 3000
 
-CMD ["/app/scripts/docker-entrypoint.sh"]
+CMD ["/bin/sh", "/app/scripts/docker-entrypoint.sh"]

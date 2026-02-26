@@ -12,7 +12,7 @@ No Cursor or Copilot instruction files were found in `.cursor/rules/`,
 - Tab content lives in `components/tabs/`
 - Shared helpers live in `lib/`
 - Styling is Tailwind + CSS variables in `app/globals.css`
-- Prisma is installed; `postinstall` runs `prisma generate`
+- Prisma is installed; `postinstall` runs `prisma generate || true`
 
 ## Build, lint, test
 
@@ -36,8 +36,9 @@ No Cursor or Copilot instruction files were found in `.cursor/rules/`,
 ### Tests
 
 - No test runner is configured in `package.json`.
-- If you add a test runner, prefer a `test` script in `package.json` and
-  document a single-test pattern (example: `pnpm test -- <pattern>`).
+- If you add one, prefer a `test` script in `package.json` and document a
+  single-test pattern such as `pnpm test -- <pattern>` or
+  `pnpm test -- --runTestsByPath <file>` depending on the runner.
 
 ### Prisma
 

@@ -1,0 +1,63 @@
+#!/bin/bash
+set -e
+
+sudo apt-get update -y
+# Add Docker's official GPG key:
+sudo apt update
+sudo apt install ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add the repository to Apt sources:
+sudo tee /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+sudo apt update
+
+sudo apt install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo systemctl enable --now docker
+
+sudo usermod -aG docker $USER
+newgrp docker
+
+mkdir -p /opt/deutschmeister
+cd /opt/deutschmeister
+
+git clone https://github.com/YESHUBGIT/DeutschMeisterApp.git .
+chown -R ubuntu:ubuntu /opt/deutschmeister
+
+cat > .env <<'EOF'
+NEXTAUTH_URL=https://thecloudtitan.de
+NEXTAUTH_SECRET=nextauthsecret
+NEXTAUTH_TRUST_HOST=true
+
+COGNITO_CLIENT_ID="7t9po5p2tkmqqd9sl02lbeb8t"
+COGNITO_CLIENT_SECRET="cdtmfs89qgic0td63gamdh6poepr8e36j8vvd0b9o89covnhv55"
+COGNITO_ISSUER="https://cognito-idp.us-east-1.amazonaws.com/us-east-1_NLWDaRRCx"
+
+POSTGRES_PASSWORD=pguserpassword
+EOF
+
+# Ensure docker-compose uses Docker Hub image
+sed -i 's|build:.*|image: yeshdock/deutschmeister:latest|g' docker-compose.yml
+sed -i '/dockerfile:/d' docker-compose.yml
+sed -i '/context:/d' docker-compose.yml
+
+docker pull yeshdock/deutschmeister:latest
+docker compose up -d
+
+# Apply migrations if present
+docker compose exec app pnpm prisma migrate deploy
+
+# TLS setup is manual after DNS is live:
+# docker compose stop nginx
+# docker compose run --rm --service-ports --entrypoint certbot certbot certonly --standalone \
+#   -d thecloudtitan.de -d www.thecloudtitan.de \
+#   --email you@thecloudtitan.de --agree-tos --no-eff-email
+# docker compose up -d

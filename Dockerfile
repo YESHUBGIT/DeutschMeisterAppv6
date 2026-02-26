@@ -25,6 +25,8 @@ FROM base AS runner
 ENV NODE_ENV=production
 ENV PORT=3000
 
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY --from=builder /app/next.config.mjs ./next.config.mjs

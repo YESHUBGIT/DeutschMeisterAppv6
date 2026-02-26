@@ -31,6 +31,24 @@ jobs:
           push: true
           tags: ${{ secrets.DOCKERHUB_USERNAME }}/deutschmeister:latest
 
+      - name: Ensure server directory exists
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 3.94.163.196
+          username: ubuntu
+          key: ${{ secrets.AWS_SSH_KEY }}
+          script: |
+            mkdir -p /opt/deutschmeisterv6
+
+      - name: Sync repo to AWS server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: 3.94.163.196
+          username: ubuntu
+          key: ${{ secrets.AWS_SSH_KEY }}
+          source: "./*"
+          target: "/opt/deutschmeisterv6"
+
       - name: Deploy to AWS server
         uses: appleboy/ssh-action@v1.0.3
         with:
@@ -38,7 +56,8 @@ jobs:
           username: ubuntu
           key: ${{ secrets.AWS_SSH_KEY }}
           script: |
-            cd /opt/deutschmeister
+            cd /opt/deutschmeisterv6
             docker pull yeshdock/deutschmeister:latest
             docker compose up -d
             docker image prune -f
+###

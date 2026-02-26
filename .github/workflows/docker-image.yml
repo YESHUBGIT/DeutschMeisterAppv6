@@ -38,7 +38,8 @@ jobs:
           username: ubuntu
           key: ${{ secrets.AWS_SSH_KEY }}
           script: |
-            mkdir -p /opt/deutschmeisterv6
+            sudo mkdir -p /opt/deutschmeisterv6
+            sudo chown -R ubuntu:ubuntu /opt/deutschmeisterv6
 
       - name: Sync repo to AWS server
         uses: appleboy/scp-action@v0.1.7

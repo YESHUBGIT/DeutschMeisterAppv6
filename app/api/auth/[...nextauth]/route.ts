@@ -1,4 +1,7 @@
+import NextAuth from "next-auth"
 import { NextResponse } from "next/server"
+
+import { authOptions } from "@/auth"
 
 /*
  * When AUTH_DISABLED=true we return mock JSON for ALL NextAuth endpoints
@@ -33,33 +36,14 @@ function mockResponse(req: Request) {
   return NextResponse.json({ ok: true })
 }
 
-/* Lazy-load the real handler only when auth is enabled */
-let _handler: ((req: Request, ctx: unknown) => unknown) | null = null
-
-function getRealHandler() {
-  if (_handler) return _handler
-  try {
-    const dynamicRequire = eval("require") as NodeRequire
-    const NextAuth = dynamicRequire("next-auth").default
-    const { authOptions } = dynamicRequire("@/auth")
-    _handler = NextAuth(authOptions)
-    return _handler
-  } catch (err) {
-    console.error("[v0] Failed to load NextAuth handler:", err)
-    return null
-  }
-}
+const handler = NextAuth(authOptions)
 
 export function GET(req: Request, ctx: unknown) {
   if (AUTH_DISABLED) return mockResponse(req)
-  const handler = getRealHandler()
-  if (!handler) return NextResponse.json({ error: "Auth unavailable" }, { status: 500 })
   return (handler as (req: Request, ctx: unknown) => unknown)(req, ctx)
 }
 
 export function POST(req: Request, ctx: unknown) {
   if (AUTH_DISABLED) return mockResponse(req)
-  const handler = getRealHandler()
-  if (!handler) return NextResponse.json({ error: "Auth unavailable" }, { status: 500 })
   return (handler as (req: Request, ctx: unknown) => unknown)(req, ctx)
 }

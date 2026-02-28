@@ -75,6 +75,16 @@ export interface LessonOptions {
   learningStyle?: LearningStyle | null
 }
 
+interface LessonContext {
+  title: string
+  abilityObjective: string
+  vocabulary: VocabItem[]
+  dialogue: DialogueLine[]
+  production: { prompt: string; sampleAnswer: string }
+  skillUnlock: string
+  reviewSuggestion: string
+}
+
 const LESSON_IDS = [
   "greetings-intro",
   "numbers-time",
@@ -85,6 +95,81 @@ const LESSON_IDS = [
   "negation",
   "question-words",
 ]
+
+const PURPOSE_TRACKS: PurposeTrack[] = ["work", "travel", "study", "relocation", "exams", "daily"]
+
+const PURPOSE_TEMPLATES = {
+  work: {
+    speakerA: "Anna",
+    speakerB: "Herr Weber",
+    place: { de: "im Büro", en: "in the office" },
+    item: { de: "der Bericht", en: "the report" },
+    task: { de: "das Projekt", en: "the project" },
+    document: { de: "die E-Mail", en: "the email" },
+    service: { de: "die Besprechung", en: "the meeting" },
+  },
+  travel: {
+    speakerA: "Reisender",
+    speakerB: "Info",
+    place: { de: "am Bahnhof", en: "at the station" },
+    item: { de: "die Fahrkarte", en: "the ticket" },
+    task: { de: "die Reservierung", en: "the reservation" },
+    document: { de: "der Pass", en: "the passport" },
+    service: { de: "das Hotel", en: "the hotel" },
+  },
+  study: {
+    speakerA: "Student",
+    speakerB: "Professor",
+    place: { de: "im Seminar", en: "in the seminar" },
+    item: { de: "die Aufgabe", en: "the assignment" },
+    task: { de: "die Präsentation", en: "the presentation" },
+    document: { de: "die E-Mail", en: "the email" },
+    service: { de: "die Sprechstunde", en: "the office hours" },
+  },
+  relocation: {
+    speakerA: "Kunde",
+    speakerB: "Sachbearbeiter",
+    place: { de: "im Bürgeramt", en: "at the citizens' office" },
+    item: { de: "das Formular", en: "the form" },
+    task: { de: "die Anmeldung", en: "the registration" },
+    document: { de: "der Vertrag", en: "the contract" },
+    service: { de: "der Termin", en: "the appointment" },
+  },
+  exams: {
+    speakerA: "Kandidat",
+    speakerB: "Prüfer",
+    place: { de: "im Prüfungsraum", en: "in the exam room" },
+    item: { de: "die Aufgabe", en: "the task" },
+    task: { de: "die Prüfung", en: "the exam" },
+    document: { de: "die Antwort", en: "the answer" },
+    service: { de: "der Teil", en: "the section" },
+  },
+  daily: {
+    speakerA: "Lena",
+    speakerB: "Tom",
+    place: { de: "im Alltag", en: "in daily life" },
+    item: { de: "der Einkauf", en: "the shopping" },
+    task: { de: "der Plan", en: "the plan" },
+    document: { de: "die Nachricht", en: "the message" },
+    service: { de: "der Termin", en: "the appointment" },
+  },
+} as const
+
+const PURPOSE_LABELS: Record<PurposeTrack, string> = {
+  work: "at work",
+  travel: "while traveling",
+  study: "at university",
+  relocation: "during relocation",
+  exams: "in exams",
+  daily: "in daily life",
+}
+
+function buildPurposeMap(makeContext: (purpose: PurposeTrack) => LessonContext) {
+  return PURPOSE_TRACKS.reduce((acc, purpose) => {
+    acc[purpose] = makeContext(purpose)
+    return acc
+  }, {} as Record<PurposeTrack, LessonContext>)
+}
 
 const lessonMeta = new Map(lessonCatalog.map(item => [item.id, item]))
 
@@ -133,6 +218,37 @@ function buildLessonShell(
   }
 }
 
+function buildLessonFromContext(
+  lessonId: string,
+  options: LessonOptions,
+  contextByPurpose: Record<PurposeTrack, LessonContext>,
+  grammarPoints: GrammarPoint[],
+  grammarSummary: GrammarPoint,
+  exercises: Exercise[]
+): LessonContent {
+  const purposeTrack = normalizePurpose(options.purpose)
+  const short = isShortSession(options.timeCommitment)
+  const speakingPriority = options.learningStyle === "speaking"
+  const shell = buildLessonShell(lessonId, purposeTrack)
+  const context = contextByPurpose[purposeTrack]
+
+  const content: LessonContent = {
+    ...shell,
+    title: context.title,
+    abilityObjective: context.abilityObjective,
+    grammarPoints: applyGrammarClarity(grammarPoints, options.learningStyle, grammarSummary),
+    vocabulary: context.vocabulary,
+    dialogue: context.dialogue,
+    exercises,
+    skillUnlock: context.skillUnlock,
+    reviewSuggestion: context.reviewSuggestion,
+    goal: context.abilityObjective,
+    reviewHint: context.reviewSuggestion,
+  }
+
+  return applyBudget(content, short, speakingPriority)
+}
+
 function applyBudget(
   content: LessonContent,
   short: boolean,
@@ -155,6 +271,18 @@ function applyBudget(
     exercises,
     vocabulary: limitVocabulary(content.vocabulary, content.level, short),
   }
+}
+
+function ensureExamTiming(content: LessonContent): LessonContent {
+  if (content.purposeTrack !== "exams") return content
+  const hasTimed = content.exercises.some(ex => ex.prompt.toLowerCase().includes("timed"))
+  if (hasTimed || content.exercises.length === 0) return content
+
+  const exercises = content.exercises.map((ex, index) =>
+    index === 0 ? { ...ex, prompt: `Timed (45s): ${ex.prompt}` } : ex
+  )
+
+  return { ...content, exercises }
 }
 
 function buildGreetingsIntro(options: LessonOptions): LessonContent {
@@ -357,7 +485,7 @@ function buildGreetingsIntro(options: LessonOptions): LessonContent {
     {
       kind: "reorder",
       prompt: "Put the words in order: 'Nice to meet you.'",
-      words: ["mich", "Freut", "."],
+      words: ["Freut", "mich", "."],
       answer: "Freut mich.",
       explanation: "Short greeting: Freut mich.",
     },
@@ -1880,6 +2008,2257 @@ function buildQuestionWords(options: LessonOptions): LessonContent {
   return applyBudget(content, short, speakingPriority)
 }
 
+function buildModalVerbs(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Modal verbs (können, müssen, wollen, dürfen, sollen) go in position 2; the main verb is at the end." },
+    { rule: "Conjugate the modal: ich kann, du kannst, er/sie/es kann, wir können." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Modal verb in position 2 + infinitive at the end.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct form: 'Ich ___ heute kommen.'",
+      options: ["kann", "kannst", "können", "könnt"],
+      answer: "kann",
+      explanation: "Ich + kann.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Wir ___ die Aufgabe machen.'",
+      options: ["müssen", "muss", "musst", "müsst"],
+      answer: "müssen",
+      explanation: "Wir + müssen.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I want to pay today.'",
+      words: ["Ich", "will", "heute", "bezahlen", "."],
+      answer: "Ich will heute bezahlen.",
+      explanation: "Infinitive at the end: bezahlen.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Say what you can or must do today.",
+      answer: "",
+      sampleAnswer: "Ich kann heute später kommen, aber ich muss den Bericht schicken.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use one modal verb.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Express ability, obligation, and permission ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use modal verbs to talk about ${t.task.de} and permissions ${t.place.de}.`,
+      vocabulary: [
+        { german: "können", english: "can" },
+        { german: "müssen", english: "must" },
+        { german: "dürfen", english: "may" },
+        { german: "wollen", english: "want" },
+        { german: t.item.de, english: t.item.en },
+        { german: t.service.de, english: t.service.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Kann ich ${t.item.de} heute schicken?`, english: `Can I send ${t.item.en} today?` },
+        { speaker: t.speakerB, german: `Ja, du kannst. Du musst nur pünktlich sein.`, english: "Yes, you can. You just have to be on time." },
+      ],
+      production: {
+        prompt: `Roleplay: Ask if you can or must do ${t.task.de}.`,
+        sampleAnswer: `Kann ich ${t.task.de} morgen machen? Ich muss heute ${t.document.de} schreiben.`,
+      },
+      skillUnlock: "You can express ability and obligation with modal verbs.",
+      reviewSuggestion: "Say two sentences with können and müssen.",
+    }
+  })
+
+  return buildLessonFromContext("modal-verbs", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildAccusativeCase(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Direct objects take the accusative: der -> den, ein -> einen." },
+    { rule: "Accusative pronouns: mich, dich, ihn, sie, es, uns, euch, sie/Sie." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Direct object = accusative (den/einen).",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct article: 'Ich sehe ___ Mann.'",
+      options: ["den", "dem", "der", "des"],
+      answer: "den",
+      explanation: "Direct object masculine = den.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Wir kaufen ___ Kaffee.'",
+      options: ["einen", "ein", "einem", "eines"],
+      answer: "einen",
+      explanation: "Accusative masculine: einen Kaffee.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I need the ticket.'",
+      words: ["Ich", "brauche", "die", "Fahrkarte", "."],
+      answer: "Ich brauche die Fahrkarte.",
+      explanation: "Direct object in accusative.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Say what you need to buy today.",
+      answer: "",
+      sampleAnswer: "Ich brauche den Bericht und eine E-Mail.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use an accusative object.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Talk about what you need and use ${t.item.en} ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use accusative objects to describe ${t.item.de} and tasks ${t.place.de}.`,
+      vocabulary: [
+        { german: "brauchen", english: "to need" },
+        { german: "sehen", english: "to see" },
+        { german: "kaufen", english: "to buy" },
+        { german: t.item.de, english: t.item.en },
+        { german: t.document.de, english: t.document.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Ich brauche ${t.item.de}.`, english: `I need ${t.item.en}.` },
+        { speaker: t.speakerB, german: `Ich kaufe ${t.item.de} gleich.`, english: `I'll buy ${t.item.en} now.` },
+      ],
+      production: {
+        prompt: `Roleplay: Say what you need to get ${t.place.de}.`,
+        sampleAnswer: `Ich brauche ${t.document.de} und ${t.item.de}.`,
+      },
+      skillUnlock: "You can name direct objects with the accusative case.",
+      reviewSuggestion: "Name three things you need using den/die/das.",
+    }
+  })
+
+  return buildLessonFromContext("accusative-case", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildDativeCase(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Indirect objects take the dative: der -> dem, ein -> einem." },
+    { rule: "Dative pronouns: mir, dir, ihm, ihr, uns, euch, ihnen, Ihnen." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Indirect object = dative (dem/einem).",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct form: 'Ich gebe ___ Kollegen den Bericht.'",
+      options: ["dem", "den", "der", "des"],
+      answer: "dem",
+      explanation: "Indirect object masculine = dem.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Wir schicken ___ Frau eine E-Mail.'",
+      options: ["der", "die", "den", "dem"],
+      answer: "der",
+      explanation: "Dative feminine: der Frau.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I show the ticket to him.'",
+      words: ["Ich", "zeige", "ihm", "die", "Fahrkarte", "."],
+      answer: "Ich zeige ihm die Fahrkarte.",
+      explanation: "Dative pronoun before accusative object.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Say who you give something to.",
+      answer: "",
+      sampleAnswer: "Ich gebe dem Kollegen den Bericht.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use a dative object.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Describe who you give or send things to ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use dative objects to describe giving ${t.document.de} ${t.place.de}.`,
+      vocabulary: [
+        { german: "geben", english: "to give" },
+        { german: "schicken", english: "to send" },
+        { german: "zeigen", english: "to show" },
+        { german: t.document.de, english: t.document.en },
+        { german: t.service.de, english: t.service.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Ich schicke ${t.document.de} der Kollegin.`, english: `I send ${t.document.en} to the colleague.` },
+        { speaker: t.speakerB, german: `Danke, ich gebe es dem Chef.`, english: "Thanks, I'll give it to the boss." },
+      ],
+      production: {
+        prompt: `Roleplay: Say who you send ${t.document.de} to.`,
+        sampleAnswer: `Ich schicke ${t.document.de} dem ${t.speakerB}.`,
+      },
+      skillUnlock: "You can use the dative case for indirect objects.",
+      reviewSuggestion: "Say two sentences with 'geben' or 'schicken'.",
+    }
+  })
+
+  return buildLessonFromContext("dative-case", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildSeparableVerbs(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Separable verbs split: Ich rufe dich an. (prefix at the end)." },
+    { rule: "In infinitive/with modals, the prefix stays attached: anrufen." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Prefix at the end in present tense statements.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct sentence.",
+      options: ["Ich rufe dich an.", "Ich anrufe dich.", "Ich rufe an dich.", "Ich dich anrufe."],
+      answer: "Ich rufe dich an.",
+      explanation: "Prefix goes to the end.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Der Zug fährt um neun Uhr ___.'",
+      options: ["ab", "auf", "an", "aus"],
+      answer: "ab",
+      explanation: "abfahren = to depart.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I fill out the form.'",
+      words: ["Ich", "fülle", "das", "Formular", "aus", "."],
+      answer: "Ich fülle das Formular aus.",
+      explanation: "aus goes to the end.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Describe a short routine using a separable verb.",
+      answer: "",
+      sampleAnswer: "Ich stehe um sieben Uhr auf und rufe meine Kollegin an.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use one separable verb.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Talk about routines step by step ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use separable verbs to describe tasks ${t.place.de}.`,
+      vocabulary: [
+        { german: "aufstehen", english: "to get up" },
+        { german: "anrufen", english: "to call" },
+        { german: "ausfüllen", english: "to fill out" },
+        { german: "abfahren", english: "to depart" },
+        { german: t.item.de, english: t.item.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Ich rufe ${t.speakerB} später an.`, english: `I will call ${t.speakerB} later.` },
+        { speaker: t.speakerB, german: `Gut, ich fülle ${t.item.de} jetzt aus.`, english: `Okay, I'll fill out ${t.item.en} now.` },
+      ],
+      production: {
+        prompt: `Roleplay: Describe one task ${t.place.de} with a separable verb.`,
+        sampleAnswer: `Ich fülle ${t.item.de} aus und rufe ${t.speakerB} an.`,
+      },
+      skillUnlock: "You can use separable verbs in daily routines.",
+      reviewSuggestion: "Say three separable verbs aloud today.",
+    }
+  })
+
+  return buildLessonFromContext("separable-verbs", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildPrepositionsByCase(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Two-way prepositions take accusative for movement and dative for location." },
+    { rule: "in/auf/an + accusative = where to; in/auf/an + dative = where." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: movement = accusative, location = dative.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct case: 'Ich gehe ___ das Büro.'",
+      options: ["in", "im", "ins", "bei"],
+      answer: "ins",
+      explanation: "Movement -> ins (in + das).",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Ich bin ___ Büro.'",
+      options: ["im", "ins", "an", "auf"],
+      answer: "im",
+      explanation: "Location -> im (in + dem).",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'The ticket is on the table.'",
+      words: ["Die", "Fahrkarte", "liegt", "auf", "dem", "Tisch", "."],
+      answer: "Die Fahrkarte liegt auf dem Tisch.",
+      explanation: "Location -> dative: auf dem Tisch.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Say where you are and where you are going.",
+      answer: "",
+      sampleAnswer: "Ich bin im Büro und gehe ins Meeting.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use one location and one movement.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Describe locations and destinations ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use prepositions with cases to describe movement ${t.place.de}.`,
+      vocabulary: [
+        { german: "in", english: "in" },
+        { german: "auf", english: "on" },
+        { german: "an", english: "at" },
+        { german: t.place.de, english: t.place.en },
+        { german: t.service.de, english: t.service.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Ich bin ${t.place.de}.`, english: `I am ${t.place.en}.` },
+        { speaker: t.speakerB, german: `Ich gehe in ${t.service.de}.`, english: `I am going into ${t.service.en}.` },
+      ],
+      production: {
+        prompt: `Roleplay: Say where ${t.item.de} is and where you go next.`,
+        sampleAnswer: `Die ${t.item.de} ist auf dem Tisch. Ich gehe in ${t.service.de}.`,
+      },
+      skillUnlock: "You can choose the right case with prepositions.",
+      reviewSuggestion: "Say two sentences with in/auf.",
+    }
+  })
+
+  return buildLessonFromContext("prepositions-by-case", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildPastPerfekt(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Perfekt = haben/sein + Partizip II: Ich habe gearbeitet. Ich bin gegangen." },
+    { rule: "Movement and change of state use sein." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: habe/hat + Partizip, bin/ist + movement verbs.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct auxiliary: 'Ich ___ gestern gegangen.'",
+      options: ["bin", "habe", "hat", "ist"],
+      answer: "bin",
+      explanation: "Movement verb -> sein.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Wir haben den Bericht ___.'",
+      options: ["geschrieben", "schreiben", "geschriebenen", "schreibe"],
+      answer: "geschrieben",
+      explanation: "Partizip II: geschrieben.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I booked the hotel.'",
+      words: ["Ich", "habe", "das", "Hotel", "gebucht", "."],
+      answer: "Ich habe das Hotel gebucht.",
+      explanation: "Auxiliary + participle at the end.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Say two things you did yesterday.",
+      answer: "",
+      sampleAnswer: "Ich habe eine E-Mail geschrieben und bin nach Hause gefahren.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use Perfekt with haben/sein.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Talk about what you did earlier ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use Perfekt to describe past tasks like ${t.task.de}.`,
+      vocabulary: [
+        { german: "gestern", english: "yesterday" },
+        { german: "heute", english: "today" },
+        { german: "machen", english: "to do" },
+        { german: "gehen", english: "to go" },
+        { german: t.task.de, english: t.task.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Ich habe ${t.task.de} gemacht.`, english: `I did ${t.task.en}.` },
+        { speaker: t.speakerB, german: `Ich bin zu ${t.service.de} gegangen.`, english: `I went to ${t.service.en}.` },
+      ],
+      production: {
+        prompt: `Roleplay: Say what you did ${t.place.de} yesterday.`,
+        sampleAnswer: `Ich habe ${t.document.de} geschrieben und bin zu ${t.service.de} gegangen.`,
+      },
+      skillUnlock: "You can talk about past actions with Perfekt.",
+      reviewSuggestion: "Say two Perfekt sentences aloud.",
+    }
+  })
+
+  return buildLessonFromContext("past-perfekt", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildConnectorsWeilDass(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "weil/dass/wenn start a subordinate clause; the verb goes to the end." },
+    { rule: "Main clause stays V2: Ich komme, weil ich Zeit habe." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: connector + subject + ... + verb at the end.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct sentence.",
+      options: [
+        "Ich komme, weil ich Zeit habe.",
+        "Ich komme, weil ich habe Zeit.",
+        "Ich komme, weil habe ich Zeit.",
+        "Ich komme, weil Zeit ich habe.",
+      ],
+      answer: "Ich komme, weil ich Zeit habe.",
+      explanation: "Verb goes to the end in the weil-clause.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Ich denke, ___ wir morgen starten.'",
+      options: ["dass", "weil", "wenn", "denn"],
+      answer: "dass",
+      explanation: "Use dass to report a statement.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I stay because I am tired.'",
+      words: ["Ich", "bleibe", ",", "weil", "ich", "müde", "bin", "."],
+      answer: "Ich bleibe, weil ich müde bin.",
+      explanation: "Verb at the end of the clause.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Give a reason using weil.",
+      answer: "",
+      sampleAnswer: "Ich komme später, weil ich noch ein Meeting habe.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use weil + verb-final.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Explain reasons and share opinions ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use weil/dass to explain decisions about ${t.task.de}.`,
+      vocabulary: [
+        { german: "weil", english: "because" },
+        { german: "dass", english: "that" },
+        { german: "wenn", english: "if/when" },
+        { german: "deshalb", english: "therefore" },
+        { german: t.task.de, english: t.task.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Ich komme später, weil ich ${t.task.de} mache.`, english: `I'll come later because I'm doing ${t.task.en}.` },
+        { speaker: t.speakerB, german: `Okay, ich denke, dass das gut ist.`, english: "Okay, I think that is good." },
+      ],
+      production: {
+        prompt: `Roleplay: Explain a delay ${t.place.de} with weil.`,
+        sampleAnswer: `Ich komme später, weil ich ${t.document.de} schreiben muss.`,
+      },
+      skillUnlock: "You can explain reasons with connectors.",
+      reviewSuggestion: "Say two weil-sentences today.",
+    }
+  })
+
+  return buildLessonFromContext("connectors-weil-dass", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildReflexiveVerbs(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Reflexive verbs use sich: ich freue mich, du meldest dich an." },
+    { rule: "Reflexive pronouns: mich/dich/sich/uns/euch/sich." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Use reflexive pronouns with reflexive verbs.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct sentence.",
+      options: ["Ich melde mich an.", "Ich melde an mich.", "Ich mich melde an.", "Ich melde an."],
+      answer: "Ich melde mich an.",
+      explanation: "Reflexive pronoun + separable verb.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Wir freuen ___ auf das Treffen.'",
+      options: ["uns", "mich", "euch", "dich"],
+      answer: "uns",
+      explanation: "Wir + uns.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I introduce myself.'",
+      words: ["Ich", "stelle", "mich", "vor", "."],
+      answer: "Ich stelle mich vor.",
+      explanation: "Reflexive pronoun before the verb stem.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Say a reflexive action you do today.",
+      answer: "",
+      sampleAnswer: "Ich melde mich beim Kurs an und freue mich darauf.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use a reflexive verb.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Describe routines and reactions ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use reflexive verbs to describe your actions ${t.place.de}.`,
+      vocabulary: [
+        { german: "sich anmelden", english: "to register" },
+        { german: "sich freuen", english: "to be happy" },
+        { german: "sich vorstellen", english: "to introduce oneself" },
+        { german: t.task.de, english: t.task.en },
+        { german: t.service.de, english: t.service.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Ich melde mich für ${t.task.de} an.`, english: `I'm registering for ${t.task.en}.` },
+        { speaker: t.speakerB, german: `Super, ich freue mich auf ${t.service.de}.`, english: `Great, I'm looking forward to ${t.service.en}.` },
+      ],
+      production: {
+        prompt: `Roleplay: Say how you register or prepare ${t.place.de}.`,
+        sampleAnswer: `Ich melde mich an und stelle mich vor.`,
+      },
+      skillUnlock: "You can use common reflexive verbs.",
+      reviewSuggestion: "Say two reflexive verbs aloud.",
+    }
+  })
+
+  return buildLessonFromContext("reflexive-verbs", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildPossessiveArticles(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Possessive articles: mein/dein/sein/ihr/unser/euer/Ihr." },
+    { rule: "They change with case and gender: mein Vater, meine Mutter, mein Kind." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Possessive articles act like ein-words.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct form: 'Das ist ___ Buch.'",
+      options: ["mein", "meine", "meinen", "meinem"],
+      answer: "mein",
+      explanation: "Neuter: mein Buch.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Ich sehe ___ Kollegin.'",
+      options: ["meine", "mein", "meinen", "meinem"],
+      answer: "meine",
+      explanation: "Accusative feminine: meine Kollegin.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'This is my ticket.'",
+      words: ["Das", "ist", "meine", "Fahrkarte", "."],
+      answer: "Das ist meine Fahrkarte.",
+      explanation: "Possessive article before the noun.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Talk about your items or tasks.",
+      answer: "",
+      sampleAnswer: "Das ist mein Bericht. Das ist meine Aufgabe.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use mein/meine.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Talk about belongings and responsibilities ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use possessive articles to describe ${t.document.de} and ${t.task.de}.`,
+      vocabulary: [
+        { german: "mein", english: "my" },
+        { german: "dein", english: "your" },
+        { german: "sein/ihr", english: "his/her" },
+        { german: t.document.de, english: t.document.en },
+        { german: t.task.de, english: t.task.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Das ist mein ${t.document.de}.`, english: `That is my ${t.document.en}.` },
+        { speaker: t.speakerB, german: `Und das ist deine ${t.task.de}.`, english: `And that is your ${t.task.en}.` },
+      ],
+      production: {
+        prompt: `Roleplay: Say what is yours ${t.place.de}.`,
+        sampleAnswer: `Das ist mein ${t.document.de}.`,
+      },
+      skillUnlock: "You can use possessive articles correctly.",
+      reviewSuggestion: "Say two sentences with mein/dein.",
+    }
+  })
+
+  return buildLessonFromContext("possessive-articles", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildComparativesSuperlatives(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Comparative: -er + als (schneller als)." },
+    { rule: "Superlative: am + -sten (am schnellsten)." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: vergleichen = -er als / am -sten.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct form: 'Die E-Mail ist ___ als der Bericht.'",
+      options: ["kürzer", "kurz", "am kürzesten", "kürzeste"],
+      answer: "kürzer",
+      explanation: "Comparative uses -er + als.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Das ist am ___.'",
+      options: ["besten", "besser", "gut", "best"],
+      answer: "besten",
+      explanation: "Superlative: am besten.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'This plan is better.'",
+      words: ["Dieser", "Plan", "ist", "besser", "."],
+      answer: "Dieser Plan ist besser.",
+      explanation: "besser is irregular comparative of gut.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Compare two options.",
+      answer: "",
+      sampleAnswer: "Das Hotel ist teurer, aber der Zug ist schneller.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use a comparative.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Compare options and express preferences ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use comparatives to compare ${t.task.de} and ${t.service.de}.`,
+      vocabulary: [
+        { german: "besser", english: "better" },
+        { german: "schneller", english: "faster" },
+        { german: "teurer", english: "more expensive" },
+        { german: "am besten", english: "the best" },
+        { german: t.service.de, english: t.service.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Der ${t.service.de} ist besser.`, english: `The ${t.service.en} is better.` },
+        { speaker: t.speakerB, german: `Ja, aber er ist teurer.`, english: "Yes, but it's more expensive." },
+      ],
+      production: {
+        prompt: `Roleplay: Compare two choices ${t.place.de}.`,
+        sampleAnswer: `Das ist schneller, aber teurer.`,
+      },
+      skillUnlock: "You can compare choices with comparatives and superlatives.",
+      reviewSuggestion: "Compare two things you use daily.",
+    }
+  })
+
+  return buildLessonFromContext("comparatives-superlatives", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildRelativeClauses(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Relative clauses use der/die/das and verb-final order." },
+    { rule: "The relative pronoun matches the noun gender and case." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: noun + comma + der/die/das + ... + verb at end.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct sentence.",
+      options: [
+        "Das ist der Kollege, der hier arbeitet.",
+        "Das ist der Kollege, der arbeitet hier.",
+        "Das ist der Kollege, der hier arbeitetet.",
+        "Das ist der Kollege, die hier arbeitet.",
+      ],
+      answer: "Das ist der Kollege, der hier arbeitet.",
+      explanation: "Verb at end; masculine der.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Das ist die Frau, ___ die E-Mail schreibt.'",
+      options: ["die", "der", "das", "den"],
+      answer: "die",
+      explanation: "Feminine: die Frau -> die.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'The ticket that is here is mine.'",
+      words: ["Die", "Fahrkarte", ",", "die", "hier", "ist", ",", "ist", "meine", "."],
+      answer: "Die Fahrkarte, die hier ist, ist meine.",
+      explanation: "Relative clause with verb-final.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Describe a person or thing with a relative clause.",
+      answer: "",
+      sampleAnswer: "Das ist der Kollege, der im Büro arbeitet.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use der/die/das.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Describe people and things in more detail ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use relative clauses to describe ${t.item.de} and people ${t.place.de}.`,
+      vocabulary: [
+        { german: "der/die/das", english: "who/which/that" },
+        { german: "hier", english: "here" },
+        { german: "dort", english: "there" },
+        { german: t.item.de, english: t.item.en },
+        { german: t.place.de, english: t.place.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Das ist ${t.item.de}, die hier liegt.`, english: `That is ${t.item.en} that is here.` },
+        { speaker: t.speakerB, german: `Danke, die brauche ich.`, english: "Thanks, I need that." },
+      ],
+      production: {
+        prompt: `Roleplay: Describe ${t.item.de} with a relative clause.`,
+        sampleAnswer: `Das ist ${t.item.de}, die hier liegt.`,
+      },
+      skillUnlock: "You can add detail with relative clauses.",
+      reviewSuggestion: "Describe one person with a relative clause.",
+    }
+  })
+
+  return buildLessonFromContext("relative-clauses", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildWorkOfficeComm(options: LessonOptions): LessonContent {
+  const t = PURPOSE_TEMPLATES.work
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Formal emails use Sie, clear structure, and polite requests." },
+    { rule: "Use 'Könnten Sie...' or 'Ich hätte eine Frage'." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Formal register = Sie + polite request.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the formal opening.",
+      options: ["Sehr geehrte Frau Weber,", "Hi Frau Weber,", "Hallo du!", "Yo!"],
+      answer: "Sehr geehrte Frau Weber,",
+      explanation: "Formal opening for emails.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Könnten ___ mir den Bericht schicken?'",
+      options: ["Sie", "du", "ihr", "dich"],
+      answer: "Sie",
+      explanation: "Formal request uses Sie.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'Please send the file.'",
+      words: ["Bitte", "schicken", "Sie", "die", "Datei", "."],
+      answer: "Bitte schicken Sie die Datei.",
+      explanation: "Verb in position 2.",
+    },
+    {
+      kind: "production",
+      prompt: "Write one formal request email sentence.",
+      answer: "",
+      sampleAnswer: "Könnten Sie mir den Bericht bis morgen schicken?",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Keep it polite and clear.",
+    },
+  ]
+
+  const context: LessonContext = {
+    title: "Write emails and communicate with colleagues",
+    abilityObjective: "Write short, formal emails and requests using Sie.",
+    vocabulary: [
+      { german: "Sehr geehrte", english: "Dear (formal)" },
+      { german: "Mit freundlichen Grüßen", english: "Kind regards" },
+      { german: "der Anhang", english: "the attachment" },
+      { german: t.document.de, english: t.document.en },
+      { german: t.service.de, english: t.service.en },
+    ],
+    dialogue: [
+      { speaker: "Mail", german: "Sehr geehrte Frau Weber, könnten Sie mir den Bericht schicken?", english: "Dear Ms. Weber, could you send me the report?" },
+      { speaker: "Antwort", german: "Gern. Ich schicke ihn heute.", english: "Sure. I'll send it today." },
+    ],
+    production: {
+      prompt: "Roleplay: Write a two-line formal email asking for an update.",
+      sampleAnswer: "Sehr geehrte Frau Weber, könnten Sie mir ein Update zum Projekt schicken?",
+    },
+    skillUnlock: "You can write short formal requests at work.",
+    reviewSuggestion: "Practice one polite email opening and closing.",
+  }
+
+  const contextByPurpose = buildPurposeMap(() => context)
+
+  return buildLessonFromContext("work-office-comm", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildWorkMeetings(options: LessonOptions): LessonContent {
+  const t = PURPOSE_TEMPLATES.work
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Use opinion phrases: Meiner Meinung nach..., Ich schlage vor..." },
+    { rule: "Structure ideas with zuerst, dann, zum Schluss." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Use opinion + suggestion phrases in meetings.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the best meeting phrase.",
+      options: ["Ich schlage vor, ...", "Ich will, ...", "Gib mir ...", "Nein."],
+      answer: "Ich schlage vor, ...",
+      explanation: "Polite suggestion phrase.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Meiner Meinung ___ sollten wir starten.'",
+      options: ["nach", "zu", "für", "bei"],
+      answer: "nach",
+      explanation: "Meiner Meinung nach.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I suggest we start now.'",
+      words: ["Ich", "schlage", "vor", ",", "dass", "wir", "jetzt", "starten", "."],
+      answer: "Ich schlage vor, dass wir jetzt starten.",
+      explanation: "dass-clause with verb at end.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Give a short suggestion in a meeting.",
+      answer: "",
+      sampleAnswer: "Ich schlage vor, dass wir den Bericht zuerst besprechen.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use a suggestion phrase.",
+    },
+  ]
+
+  const context: LessonContext = {
+    title: "Contribute to meetings and present ideas",
+    abilityObjective: "Give opinions and suggestions in meetings.",
+    vocabulary: [
+      { german: "Ich schlage vor", english: "I suggest" },
+      { german: "Meiner Meinung nach", english: "In my opinion" },
+      { german: "zustimmen", english: "to agree" },
+      { german: t.service.de, english: t.service.en },
+      { german: t.item.de, english: t.item.en },
+    ],
+    dialogue: [
+      { speaker: "Leitung", german: "Haben Sie einen Vorschlag?", english: "Do you have a suggestion?" },
+      { speaker: "Anna", german: "Ich schlage vor, dass wir den Bericht zuerst lesen.", english: "I suggest that we read the report first." },
+    ],
+    production: {
+      prompt: "Roleplay: Suggest one next step for the project.",
+      sampleAnswer: "Ich schlage vor, dass wir das Projekt diese Woche starten.",
+    },
+    skillUnlock: "You can contribute politely in meetings.",
+    reviewSuggestion: "Practice two opinion phrases aloud.",
+  }
+
+  const contextByPurpose = buildPurposeMap(() => context)
+
+  return buildLessonFromContext("work-meetings", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildTravelNavigation(options: LessonOptions): LessonContent {
+  const t = PURPOSE_TEMPLATES.travel
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Use direction phrases: links, rechts, geradeaus." },
+    { rule: "Imperative for directions: Gehen Sie..., Fahren Sie..." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Direction words + polite imperative.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct direction word for 'straight'.",
+      options: ["geradeaus", "links", "rechts", "zurück"],
+      answer: "geradeaus",
+      explanation: "geradeaus = straight ahead.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Gehen Sie ___ und dann links.'",
+      options: ["geradeaus", "rechts", "zurück", "oben"],
+      answer: "geradeaus",
+      explanation: "Straight ahead.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'Where is the station?'",
+      words: ["Wo", "ist", "der", "Bahnhof", "?"],
+      answer: "Wo ist der Bahnhof?",
+      explanation: "Question word first.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Ask for directions to the station.",
+      answer: "",
+      sampleAnswer: "Entschuldigung, wo ist der Bahnhof?",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use a polite question.",
+    },
+  ]
+
+  const context: LessonContext = {
+    title: "Get around a city using public transport",
+    abilityObjective: "Ask for directions and understand transport guidance.",
+    vocabulary: [
+      { german: "der Bahnhof", english: "the station" },
+      { german: "links", english: "left" },
+      { german: "rechts", english: "right" },
+      { german: "geradeaus", english: "straight" },
+      { german: t.item.de, english: t.item.en },
+    ],
+    dialogue: [
+      { speaker: t.speakerA, german: "Wo ist der Bahnhof?", english: "Where is the station?" },
+      { speaker: t.speakerB, german: "Gehen Sie geradeaus und dann links.", english: "Go straight and then left." },
+    ],
+    production: {
+      prompt: "Roleplay: Ask for directions and repeat them.",
+      sampleAnswer: "Geradeaus und dann rechts, danke.",
+    },
+    skillUnlock: "You can ask for and follow directions while traveling.",
+    reviewSuggestion: "Say three direction words aloud.",
+  }
+
+  const contextByPurpose = buildPurposeMap(() => context)
+
+  return buildLessonFromContext("travel-navigation", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildTravelDining(options: LessonOptions): LessonContent {
+  const t = PURPOSE_TEMPLATES.travel
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Polite ordering: Ich hätte gern..., Bitte die Rechnung." },
+    { rule: "Use accusative for items: Ich nehme den Kaffee." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Ich hätte gern + item.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the polite order.",
+      options: ["Ich hätte gern einen Tee.", "Gib mir Tee.", "Tee!", "Ich will Tee."],
+      answer: "Ich hätte gern einen Tee.",
+      explanation: "Ich hätte gern is polite.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Die Rechnung, ___.'",
+      options: ["bitte", "danke", "jetzt", "sofort"],
+      answer: "bitte",
+      explanation: "Common polite request.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I take the soup.'",
+      words: ["Ich", "nehme", "die", "Suppe", "."],
+      answer: "Ich nehme die Suppe.",
+      explanation: "Verb in position 2.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Order a drink and ask for the bill.",
+      answer: "",
+      sampleAnswer: "Ich hätte gern ein Wasser. Die Rechnung, bitte.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use polite phrases.",
+    },
+  ]
+
+  const context: LessonContext = {
+    title: "Order food, ask for the bill, and tip correctly",
+    abilityObjective: "Order food politely and request the bill.",
+    vocabulary: [
+      { german: "Ich hätte gern", english: "I would like" },
+      { german: "die Speisekarte", english: "the menu" },
+      { german: "die Rechnung", english: "the bill" },
+      { german: "das Trinkgeld", english: "the tip" },
+      { german: t.service.de, english: t.service.en },
+    ],
+    dialogue: [
+      { speaker: t.speakerA, german: "Ich hätte gern einen Kaffee.", english: "I would like a coffee." },
+      { speaker: t.speakerB, german: "Gern. Möchten Sie noch etwas?", english: "Sure. Would you like anything else?" },
+    ],
+    production: {
+      prompt: "Roleplay: Order a meal and ask for the bill.",
+      sampleAnswer: "Ich hätte gern die Suppe. Die Rechnung, bitte.",
+    },
+    skillUnlock: "You can order and pay in a restaurant.",
+    reviewSuggestion: "Practice ordering two items.",
+  }
+
+  const contextByPurpose = buildPurposeMap(() => context)
+
+  return buildLessonFromContext("travel-dining", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildRelocationRegistration(options: LessonOptions): LessonContent {
+  const t = PURPOSE_TEMPLATES.relocation
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Use formal requests at offices: Ich brauche..., Könnten Sie..." },
+    { rule: "Key form vocabulary: Formular, Ausweis, Termin." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Formal requests + office vocabulary.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct phrase at the Bürgeramt.",
+      options: ["Ich brauche ein Formular.", "Gib mir Formular.", "Ich will Formular.", "Formular!"],
+      answer: "Ich brauche ein Formular.",
+      explanation: "Polite request.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Ich habe einen ___ um 9 Uhr.'",
+      options: ["Termin", "Pass", "Ausweis", "Tisch"],
+      answer: "Termin",
+      explanation: "Appointment = Termin.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I need an appointment.'",
+      words: ["Ich", "brauche", "einen", "Termin", "."],
+      answer: "Ich brauche einen Termin.",
+      explanation: "Basic request.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Ask for Anmeldung at the office.",
+      answer: "",
+      sampleAnswer: "Guten Tag, ich brauche ein Formular für die Anmeldung.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use a polite request.",
+    },
+  ]
+
+  const context: LessonContext = {
+    title: "Register your address and navigate Bürgeramt",
+    abilityObjective: "Ask for forms and appointments for Anmeldung.",
+    vocabulary: [
+      { german: "die Anmeldung", english: "the registration" },
+      { german: "das Formular", english: "the form" },
+      { german: "der Termin", english: "the appointment" },
+      { german: "der Ausweis", english: "the ID" },
+      { german: t.place.de, english: t.place.en },
+    ],
+    dialogue: [
+      { speaker: t.speakerA, german: "Guten Tag, ich habe einen Termin.", english: "Good day, I have an appointment." },
+      { speaker: t.speakerB, german: "Ihr Ausweis, bitte.", english: "Your ID, please." },
+    ],
+    production: {
+      prompt: "Roleplay: Ask for the Anmeldung form.",
+      sampleAnswer: "Ich brauche das Formular für die Anmeldung.",
+    },
+    skillUnlock: "You can handle basic Anmeldung requests.",
+    reviewSuggestion: "Say the key office words once.",
+  }
+
+  const contextByPurpose = buildPurposeMap(() => context)
+
+  return buildLessonFromContext("relocation-registration", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildRelocationHousing(options: LessonOptions): LessonContent {
+  const t = PURPOSE_TEMPLATES.relocation
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Common rental terms: Miete, Kaution, Nebenkosten." },
+    { rule: "Polite questions: Gibt es..., Ist ... inklusive?" },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Rental vocabulary + polite questions.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct rental word for deposit.",
+      options: ["Kaution", "Miete", "Zimmer", "Küche"],
+      answer: "Kaution",
+      explanation: "Deposit = Kaution.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Ist ___ inklusive?'",
+      options: ["Wasser", "der", "die", "das"],
+      answer: "Wasser",
+      explanation: "Ask if utilities are included.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'The rent is 800 euros.'",
+      words: ["Die", "Miete", "ist", "800", "Euro", "."],
+      answer: "Die Miete ist 800 Euro.",
+      explanation: "Simple statement.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Ask about the rent and utilities.",
+      answer: "",
+      sampleAnswer: "Wie hoch ist die Miete? Sind die Nebenkosten inklusive?",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use rental vocabulary.",
+    },
+  ]
+
+  const context: LessonContext = {
+    title: "Understand rental contracts and deal with landlords",
+    abilityObjective: "Ask about rent, deposit, and utilities.",
+    vocabulary: [
+      { german: "die Miete", english: "the rent" },
+      { german: "die Kaution", english: "the deposit" },
+      { german: "die Nebenkosten", english: "utilities" },
+      { german: "der Vertrag", english: "the contract" },
+      { german: t.document.de, english: t.document.en },
+    ],
+    dialogue: [
+      { speaker: "Vermieter", german: "Die Miete ist 800 Euro.", english: "The rent is 800 euros." },
+      { speaker: "Mieter", german: "Sind die Nebenkosten inklusive?", english: "Are utilities included?" },
+    ],
+    production: {
+      prompt: "Roleplay: Ask two questions about the apartment.",
+      sampleAnswer: "Wie hoch ist die Kaution? Ist Internet inklusive?",
+    },
+    skillUnlock: "You can discuss basic rental terms.",
+    reviewSuggestion: "Repeat three housing words.",
+  }
+
+  const contextByPurpose = buildPurposeMap(() => context)
+
+  return buildLessonFromContext("relocation-housing", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildStudyUniversity(options: LessonOptions): LessonContent {
+  const t = PURPOSE_TEMPLATES.study
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Academic emails use formal greeting and clear questions." },
+    { rule: "Polite requests: Könnten Sie..., Ich hätte eine Frage." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Formal email + polite request.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct email opening to a professor.",
+      options: ["Sehr geehrte Frau Professorin", "Hallo", "Hey", "Du"],
+      answer: "Sehr geehrte Frau Professorin",
+      explanation: "Formal greeting.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Könnten ___ mir den Termin bestätigen?'",
+      options: ["Sie", "du", "ihr", "dich"],
+      answer: "Sie",
+      explanation: "Formal request.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I have a question about the seminar.'",
+      words: ["Ich", "habe", "eine", "Frage", "zum", "Seminar", "."],
+      answer: "Ich habe eine Frage zum Seminar.",
+      explanation: "Simple statement.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Write a short email asking about office hours.",
+      answer: "",
+      sampleAnswer: "Sehr geehrte Frau Professorin, ich habe eine Frage zur Sprechstunde.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Keep it formal and short.",
+    },
+  ]
+
+  const context: LessonContext = {
+    title: "Navigate university life and email professors",
+    abilityObjective: "Write short formal emails to university staff.",
+    vocabulary: [
+      { german: "die Vorlesung", english: "the lecture" },
+      { german: "das Seminar", english: "the seminar" },
+      { german: "die Sprechstunde", english: "office hours" },
+      { german: "die Aufgabe", english: "the assignment" },
+      { german: t.document.de, english: t.document.en },
+    ],
+    dialogue: [
+      { speaker: "Student", german: "Ich habe eine Frage zur Aufgabe.", english: "I have a question about the assignment." },
+      { speaker: "Professor", german: "Schreiben Sie mir bitte eine E-Mail.", english: "Please write me an email." },
+    ],
+    production: {
+      prompt: "Roleplay: Ask a professor about a deadline.",
+      sampleAnswer: "Könnten Sie mir die Abgabefrist sagen?",
+    },
+    skillUnlock: "You can contact professors politely.",
+    reviewSuggestion: "Practice a formal greeting.",
+  }
+
+  const contextByPurpose = buildPurposeMap(() => context)
+
+  return buildLessonFromContext("study-university", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildStudyPresentations(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Use structure markers: Erstens, zweitens, außerdem, zusammenfassend." },
+    { rule: "Use formal connectors in presentations." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Structure your points clearly.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose a good presentation connector.",
+      options: ["Erstens", "Gestern", "Bitte", "Tschüss"],
+      answer: "Erstens",
+      explanation: "Connector for first point.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: '___ möchte ich die Ergebnisse zeigen.'",
+      options: ["Zuerst", "Bitte", "Tschüss", "Nun"],
+      answer: "Zuerst",
+      explanation: "Zuerst introduces the first point.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'First, I present the topic.'",
+      words: ["Erstens", "präsentiere", "ich", "das", "Thema", "."],
+      answer: "Erstens präsentiere ich das Thema.",
+      explanation: "Connector at the start.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Give a short presentation opening.",
+      answer: "",
+      sampleAnswer: "Erstens präsentiere ich das Thema, danach die Ergebnisse.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use at least one connector.",
+    },
+  ]
+
+  const context: LessonContext = {
+    title: "Present arguments and discuss topics academically",
+    abilityObjective: "Structure a short academic presentation.",
+    vocabulary: [
+      { german: "Erstens", english: "first" },
+      { german: "außerdem", english: "besides" },
+      { german: "zusammenfassend", english: "in summary" },
+      { german: "das Thema", english: "the topic" },
+      { german: "die Ergebnisse", english: "the results" },
+    ],
+    dialogue: [
+      { speaker: "Student", german: "Erstens präsentiere ich das Thema.", english: "First, I present the topic." },
+      { speaker: "Professor", german: "Gut, und was sind die Ergebnisse?", english: "Good, and what are the results?" },
+    ],
+    production: {
+      prompt: "Roleplay: Present two points with connectors.",
+      sampleAnswer: "Erstens erkläre ich das Thema, zweitens die Ergebnisse.",
+    },
+    skillUnlock: "You can structure a presentation with connectors.",
+    reviewSuggestion: "Practice three connectors aloud.",
+  }
+
+  const contextByPurpose = buildPurposeMap(() => context)
+
+  return buildLessonFromContext("study-presentations", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildDailyShopping(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Quantities: ein Kilo, ein Stück, eine Flasche." },
+    { rule: "Polite requests: Ich hätte gern..., Bitte..." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Quantity + noun; polite request.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the polite request.",
+      options: ["Ich hätte gern ein Brot.", "Brot!", "Gib mir Brot.", "Ich will Brot."],
+      answer: "Ich hätte gern ein Brot.",
+      explanation: "Polite ordering.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Ich nehme ___ Kilo Äpfel.'",
+      options: ["ein", "eine", "einen", "einem"],
+      answer: "ein",
+      explanation: "ein Kilo.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I need two bottles of water.'",
+      words: ["Ich", "brauche", "zwei", "Flaschen", "Wasser", "."],
+      answer: "Ich brauche zwei Flaschen Wasser.",
+      explanation: "Quantity + noun.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Order three items at the bakery.",
+      answer: "",
+      sampleAnswer: "Ich hätte gern zwei Brötchen und ein Brot, bitte.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use quantities.",
+    },
+  ]
+
+  const context: LessonContext = {
+    title: "Shop for groceries and handle everyday errands",
+    abilityObjective: "Buy groceries and ask for quantities.",
+    vocabulary: [
+      { german: "das Brot", english: "the bread" },
+      { german: "die Milch", english: "the milk" },
+      { german: "ein Kilo", english: "one kilo" },
+      { german: "die Flasche", english: "the bottle" },
+      { german: "die Kasse", english: "the checkout" },
+    ],
+    dialogue: [
+      { speaker: "Kunde", german: "Ich hätte gern ein Brot, bitte.", english: "I would like a bread, please." },
+      { speaker: "Verkäufer", german: "Gern. Sonst noch etwas?", english: "Sure. Anything else?" },
+    ],
+    production: {
+      prompt: "Roleplay: Ask for two items with quantities.",
+      sampleAnswer: "Ich hätte gern ein Kilo Äpfel und eine Flasche Wasser.",
+    },
+    skillUnlock: "You can shop and ask for quantities.",
+    reviewSuggestion: "Name three items with quantities.",
+  }
+
+  const contextByPurpose = buildPurposeMap(() => context)
+
+  return buildLessonFromContext("daily-shopping", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildDailyHealth(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Describe symptoms with haben: Ich habe Kopfschmerzen." },
+    { rule: "Make appointments: Ich brauche einen Termin." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Ich habe + symptom.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct symptom sentence.",
+      options: ["Ich habe Kopfschmerzen.", "Ich bin Kopfschmerzen.", "Ich habe kalt.", "Ich bin Schmerzen."],
+      answer: "Ich habe Kopfschmerzen.",
+      explanation: "Use haben for symptoms.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Ich brauche einen ___ beim Arzt.'",
+      options: ["Termin", "Tisch", "Pass", "Zug"],
+      answer: "Termin",
+      explanation: "Appointment = Termin.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I need a prescription.'",
+      words: ["Ich", "brauche", "ein", "Rezept", "."],
+      answer: "Ich brauche ein Rezept.",
+      explanation: "Basic request.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Describe two symptoms.",
+      answer: "",
+      sampleAnswer: "Ich habe Kopfschmerzen und Fieber.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use haben + symptom.",
+    },
+  ]
+
+  const context: LessonContext = {
+    title: "Describe symptoms and visit a doctor",
+    abilityObjective: "Describe symptoms and ask for an appointment.",
+    vocabulary: [
+      { german: "der Arzt", english: "the doctor" },
+      { german: "das Rezept", english: "the prescription" },
+      { german: "Kopfschmerzen", english: "headache" },
+      { german: "Fieber", english: "fever" },
+      { german: "der Termin", english: "the appointment" },
+    ],
+    dialogue: [
+      { speaker: "Patient", german: "Ich habe Kopfschmerzen.", english: "I have a headache." },
+      { speaker: "Arzt", german: "Ich gebe Ihnen ein Rezept.", english: "I'll give you a prescription." },
+    ],
+    production: {
+      prompt: "Roleplay: Ask for a doctor appointment.",
+      sampleAnswer: "Ich brauche einen Termin, ich habe Fieber.",
+    },
+    skillUnlock: "You can describe symptoms and request help.",
+    reviewSuggestion: "Say two symptom sentences.",
+  }
+
+  const contextByPurpose = buildPurposeMap(() => context)
+
+  return buildLessonFromContext("daily-health", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildExamsWriting(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Exam letters use structure: greeting, reason, request, closing." },
+    { rule: "Formal endings: Mit freundlichen Grüßen." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Formal letter structure.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct formal closing.",
+      options: ["Mit freundlichen Grüßen", "Tschüss", "Bis später", "Ciao"],
+      answer: "Mit freundlichen Grüßen",
+      explanation: "Formal closing.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Sehr ___ Damen und Herren,'",
+      options: ["geehrte", "gute", "guten", "geehrter"],
+      answer: "geehrte",
+      explanation: "Sehr geehrte Damen und Herren.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I would like to request an extension.'",
+      words: ["Ich", "möchte", "eine", "Verlängerung", "beantragen", "."],
+      answer: "Ich möchte eine Verlängerung beantragen.",
+      explanation: "Formal request verb.",
+    },
+    {
+      kind: "production",
+      prompt: "Timed (60s): Write two formal exam sentences (request + reason).",
+      answer: "",
+      sampleAnswer: "Ich bitte um eine Verlängerung, weil ich krank bin.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Follow the formal exam style.",
+    },
+  ]
+
+  const context: LessonContext = {
+    title: "Write formal letters and emails for exams",
+    abilityObjective: "Write structured exam-style letters.",
+    vocabulary: [
+      { german: "der Betreff", english: "the subject" },
+      { german: "die Bitte", english: "the request" },
+      { german: "die Begründung", english: "the reason" },
+      { german: "die Verlängerung", english: "the extension" },
+      { german: "Mit freundlichen Grüßen", english: "Kind regards" },
+    ],
+    dialogue: [
+      { speaker: "Prüfer", german: "Bitte schreiben Sie formal.", english: "Please write formally." },
+      { speaker: "Kandidat", german: "Ich verstehe, ich schreibe eine formelle E-Mail.", english: "I understand, I'll write a formal email." },
+    ],
+    production: {
+      prompt: "Timed (60s): Write a short formal request for exam rescheduling.",
+      sampleAnswer: "Ich bitte um einen neuen Termin, weil ich krank bin.",
+    },
+    skillUnlock: "You can write formal exam-style letters.",
+    reviewSuggestion: "Review formal openings and closings.",
+  }
+
+  const contextByPurpose = buildPurposeMap(() => context)
+
+  return buildLessonFromContext("exams-writing", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildExamsSpeaking(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Speaking tasks use clear structure: situation, request, response." },
+    { rule: "Use polite suggestions: Ich würde vorschlagen..." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: polite suggestions + clear structure.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose a good suggestion phrase.",
+      options: ["Ich würde vorschlagen...", "Nein.", "Keine Ahnung.", "Vielleicht nie."],
+      answer: "Ich würde vorschlagen...",
+      explanation: "Polite suggestion in exams.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Könnten ___ den Termin verschieben?'",
+      options: ["wir", "uns", "ihr", "dich"],
+      answer: "wir",
+      explanation: "Use wir for a joint suggestion.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I suggest we meet at 10.'",
+      words: ["Ich", "schlage", "vor", ",", "dass", "wir", "um", "10", "treffen", "."],
+      answer: "Ich schlage vor, dass wir um 10 treffen.",
+      explanation: "Suggestion with dass-clause.",
+    },
+    {
+      kind: "production",
+      prompt: "Timed (45s): Roleplay a short exam speaking task.",
+      answer: "",
+      sampleAnswer: "Ich würde vorschlagen, dass wir um zehn treffen. Passt das für dich?",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use a suggestion and a question.",
+    },
+  ]
+
+  const context: LessonContext = {
+    title: "Handle speaking roleplays under exam conditions",
+    abilityObjective: "Complete short speaking tasks with polite suggestions.",
+    vocabulary: [
+      { german: "vorschlagen", english: "to suggest" },
+      { german: "einverstanden", english: "agreed" },
+      { german: "der Vorschlag", english: "the suggestion" },
+      { german: "die Aufgabe", english: "the task" },
+      { german: "die Prüfung", english: "the exam" },
+    ],
+    dialogue: [
+      { speaker: "Prüfer", german: "Machen Sie einen Vorschlag.", english: "Make a suggestion." },
+      { speaker: "Kandidat", german: "Ich würde vorschlagen, dass wir um zehn treffen.", english: "I would suggest we meet at ten." },
+    ],
+    production: {
+      prompt: "Timed (45s): Answer a roleplay prompt with a suggestion.",
+      sampleAnswer: "Ich würde vorschlagen, dass wir heute um 18 Uhr telefonieren.",
+    },
+    skillUnlock: "You can handle speaking roleplays in exams.",
+    reviewSuggestion: "Practice one suggestion phrase aloud.",
+  }
+
+  const contextByPurpose = buildPurposeMap(() => context)
+
+  return buildLessonFromContext("exams-speaking", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildPrateritum(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Präteritum is common in written stories: war, hatte, ging, kam." },
+    { rule: "Use simple past for common verbs in narratives." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: war/hatte/ging are common Präteritum forms.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the Präteritum form of 'sein'.",
+      options: ["war", "bin", "gewesen", "ist"],
+      answer: "war",
+      explanation: "Präteritum of sein = war.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Gestern ___ ich zur Arbeit.'",
+      options: ["ging", "gehe", "bin gegangen", "geht"],
+      answer: "ging",
+      explanation: "Präteritum: ging.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I was at home.'",
+      words: ["Ich", "war", "zu", "Hause", "."],
+      answer: "Ich war zu Hause.",
+      explanation: "Simple past of sein.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Tell a short story in the past.",
+      answer: "",
+      sampleAnswer: "Ich war gestern im Büro und hatte viel zu tun.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use war/hatte/ging.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Tell short stories in the past ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use Präteritum to narrate a simple past event ${t.place.de}.`,
+      vocabulary: [
+        { german: "war", english: "was" },
+        { german: "hatte", english: "had" },
+        { german: "ging", english: "went" },
+        { german: t.place.de, english: t.place.en },
+        { german: t.task.de, english: t.task.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Gestern war ich ${t.place.de}.`, english: `Yesterday I was ${t.place.en}.` },
+        { speaker: t.speakerB, german: `Ich hatte viel zu tun.`, english: "I had a lot to do." },
+      ],
+      production: {
+        prompt: `Roleplay: Say two past sentences about ${t.task.de}.`,
+        sampleAnswer: `Ich war ${t.place.de} und hatte ${t.task.de}.`,
+      },
+      skillUnlock: "You can narrate past events with Präteritum.",
+      reviewSuggestion: "Say three Präteritum forms.",
+    }
+  })
+
+  return buildLessonFromContext("prateritum", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildPassiveVoice(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Passive voice: werden + Partizip II (Das Projekt wird geplant)." },
+    { rule: "Focus on the action, not the actor." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: werden + Partizip II = passive.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct passive sentence.",
+      options: [
+        "Der Bericht wird geschrieben.",
+        "Der Bericht schreibt.",
+        "Der Bericht ist schreiben.",
+        "Der Bericht wurde schreiben.",
+      ],
+      answer: "Der Bericht wird geschrieben.",
+      explanation: "werden + Partizip II.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Das Formular ___ ausgefüllt.'",
+      options: ["wird", "werden", "wurde", "ist"],
+      answer: "wird",
+      explanation: "Present passive uses wird.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'The ticket is checked.'",
+      words: ["Die", "Fahrkarte", "wird", "kontrolliert", "."],
+      answer: "Die Fahrkarte wird kontrolliert.",
+      explanation: "Passive structure.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Describe a process using passive.",
+      answer: "",
+      sampleAnswer: "Das Formular wird ausgefüllt und abgegeben.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use passive voice.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Describe processes and what was done ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use passive voice to describe processes with ${t.document.de}.`,
+      vocabulary: [
+        { german: "werden", english: "to become / will be" },
+        { german: "ausgefüllt", english: "filled out" },
+        { german: "geprüft", english: "checked" },
+        { german: t.document.de, english: t.document.en },
+        { german: t.task.de, english: t.task.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Das Formular wird geprüft.`, english: "The form is checked." },
+        { speaker: t.speakerB, german: `Der Bericht wird später gesendet.`, english: "The report is sent later." },
+      ],
+      production: {
+        prompt: `Roleplay: Describe how ${t.task.de} is done.`,
+        sampleAnswer: `${t.task.de} wird vorbereitet und abgeschlossen.`,
+      },
+      skillUnlock: "You can describe processes with passive voice.",
+      reviewSuggestion: "Turn one sentence into passive.",
+    }
+  })
+
+  return buildLessonFromContext("passive-voice", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildKonjunktiv2(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Konjunktiv II for polite requests: Ich hätte gern..., Könnten Sie...?" },
+    { rule: "würde + infinitive is common: Ich würde gern kommen." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: würde + infinitive for polite requests.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the polite request.",
+      options: ["Ich hätte gern einen Termin.", "Gib mir einen Termin.", "Termin!", "Ich will Termin."],
+      answer: "Ich hätte gern einen Termin.",
+      explanation: "Ich hätte gern is polite.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Ich ___ gern mehr Zeit haben.'",
+      options: ["würde", "wurde", "werde", "will"],
+      answer: "würde",
+      explanation: "würde + infinitive.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'Could you help me?'",
+      words: ["Könnten", "Sie", "mir", "helfen", "?"],
+      answer: "Könnten Sie mir helfen?",
+      explanation: "Polite request.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Make a polite request.",
+      answer: "",
+      sampleAnswer: "Könnten Sie mir den Bericht schicken?",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use Konjunktiv II.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Make polite requests and talk about hypotheticals ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use Konjunktiv II to make polite requests ${t.place.de}.`,
+      vocabulary: [
+        { german: "würde", english: "would" },
+        { german: "hätte gern", english: "would like" },
+        { german: "könnten", english: "could" },
+        { german: t.document.de, english: t.document.en },
+        { german: t.service.de, english: t.service.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Könnten Sie mir ${t.document.de} schicken?`, english: `Could you send me ${t.document.en}?` },
+        { speaker: t.speakerB, german: `Gern, ich würde es heute senden.`, english: "Sure, I would send it today." },
+      ],
+      production: {
+        prompt: `Roleplay: Ask politely for ${t.item.de}.`,
+        sampleAnswer: `Ich hätte gern ${t.item.de}, bitte.`,
+      },
+      skillUnlock: "You can make polite requests with Konjunktiv II.",
+      reviewSuggestion: "Say two polite requests.",
+    }
+  })
+
+  return buildLessonFromContext("konjunktiv-2", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildGenitivCase(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Genitive shows possession: des Mannes, der Frau." },
+    { rule: "Common genitive prepositions: trotz, während, wegen." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: des/der + noun for possession.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct genitive: 'die Farbe ___ Hauses'",
+      options: ["des", "dem", "den", "der"],
+      answer: "des",
+      explanation: "Genitive masculine/neuter uses des.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: '___ Termins gibt es keine Zeit.'",
+      options: ["Wegen", "Mit", "Ohne", "Für"],
+      answer: "Wegen",
+      explanation: "wegen + Genitiv.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'The report of the project.'",
+      words: ["der", "Bericht", "des", "Projekts"],
+      answer: "der Bericht des Projekts",
+      explanation: "Genitive: des Projekts.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Describe ownership using genitive.",
+      answer: "",
+      sampleAnswer: "Der Bericht des Teams ist fertig.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use des/der.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Express ownership and formal relations ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use genitive to describe ${t.task.de} and formal relations.`,
+      vocabulary: [
+        { german: "des", english: "of the" },
+        { german: "der", english: "of the" },
+        { german: "wegen", english: "because of" },
+        { german: t.task.de, english: t.task.en },
+        { german: t.document.de, english: t.document.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Der Bericht des Teams ist fertig.`, english: "The team's report is finished." },
+        { speaker: t.speakerB, german: `Wegen des Termins müssen wir warten.`, english: "Because of the appointment we must wait." },
+      ],
+      production: {
+        prompt: `Roleplay: Say a genitive phrase about ${t.task.de}.`,
+        sampleAnswer: `Die Ergebnisse des Projekts sind gut.`,
+      },
+      skillUnlock: "You can express possession with genitive.",
+      reviewSuggestion: "Make one genitive phrase with des/der.",
+    }
+  })
+
+  return buildLessonFromContext("genitiv-case", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildAdvancedConnectors(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Advanced connectors: obwohl, trotzdem, indem, während." },
+    { rule: "Subordinate clauses place the verb at the end." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: obwohl/indem + verb-final clause.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct connector: '___ es regnet, gehen wir.'",
+      options: ["Obwohl", "Weil", "Dass", "Und"],
+      answer: "Obwohl",
+      explanation: "Obwohl = although.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Er verbessert sich, ___ er jeden Tag übt.'",
+      options: ["indem", "weil", "dass", "aber"],
+      answer: "indem",
+      explanation: "indem = by doing.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'Although the project is hard, we continue.'",
+      words: ["Obwohl", "das", "Projekt", "schwer", "ist", ",", "machen", "wir", "weiter", "."],
+      answer: "Obwohl das Projekt schwer ist, machen wir weiter.",
+      explanation: "Verb at end in obwohl-clause.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Use obwohl or indem in a sentence.",
+      answer: "",
+      sampleAnswer: "Obwohl ich müde bin, arbeite ich weiter.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use one advanced connector.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Build complex arguments with nuance ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use advanced connectors to discuss ${t.task.de}.`,
+      vocabulary: [
+        { german: "obwohl", english: "although" },
+        { german: "trotzdem", english: "nevertheless" },
+        { german: "indem", english: "by doing" },
+        { german: t.task.de, english: t.task.en },
+        { german: t.service.de, english: t.service.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Obwohl wir wenig Zeit haben, machen wir weiter.`, english: "Although we have little time, we continue." },
+        { speaker: t.speakerB, german: `Wir schaffen es, indem wir priorisieren.`, english: "We manage by prioritizing." },
+      ],
+      production: {
+        prompt: `Roleplay: Explain a challenge ${t.place.de} with obwohl.`,
+        sampleAnswer: `Obwohl ich wenig Zeit habe, beende ich ${t.task.de}.`,
+      },
+      skillUnlock: "You can express nuance with advanced connectors.",
+      reviewSuggestion: "Use obwohl and indem in two sentences.",
+    }
+  })
+
+  return buildLessonFromContext("advanced-connectors", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildWerdenForms(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "werden is used for future and passive: Ich werde gehen. Das wird gemacht." },
+    { rule: "werden + infinitive for future, werden + Partizip for passive." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: werde + infinitive (future), wird + Partizip (passive).",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the future sentence.",
+      options: ["Ich werde morgen kommen.", "Ich komme gestern.", "Ich wurde morgen kommen.", "Ich werde gekommen."],
+      answer: "Ich werde morgen kommen.",
+      explanation: "Future uses werde + infinitive.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Der Bericht ___ heute geschrieben.'",
+      options: ["wird", "werden", "werde", "wurde"],
+      answer: "wird",
+      explanation: "Passive present: wird geschrieben.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I will send the email.'",
+      words: ["Ich", "werde", "die", "E-Mail", "senden", "."],
+      answer: "Ich werde die E-Mail senden.",
+      explanation: "werden + infinitive.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Say one future plan and one passive process.",
+      answer: "",
+      sampleAnswer: "Ich werde morgen anrufen. Der Bericht wird geprüft.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use werden in two ways.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Master every use of 'werden' ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use werden for future plans and processes with ${t.task.de}.`,
+      vocabulary: [
+        { german: "werden", english: "to become / will" },
+        { german: "morgen", english: "tomorrow" },
+        { german: "geprüft", english: "checked" },
+        { german: t.task.de, english: t.task.en },
+        { german: t.document.de, english: t.document.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Ich werde ${t.document.de} morgen senden.`, english: `I will send ${t.document.en} tomorrow.` },
+        { speaker: t.speakerB, german: `Das Formular wird heute geprüft.`, english: "The form is checked today." },
+      ],
+      production: {
+        prompt: `Roleplay: Say one plan and one process ${t.place.de}.`,
+        sampleAnswer: `Ich werde ${t.task.de} beenden. ${t.document.de} wird geprüft.`,
+      },
+      skillUnlock: "You can use werden for future and passive.",
+      reviewSuggestion: "Make one future and one passive sentence.",
+    }
+  })
+
+  return buildLessonFromContext("werden-forms", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildVerbsWithPrep(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Some verbs require fixed prepositions: warten auf, denken an, sich freuen auf." },
+    { rule: "Use da-/wo- compounds: daran, darauf, woran." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: Verb + preposition are fixed pairs.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the correct preposition: 'warten ___ den Zug'",
+      options: ["auf", "an", "mit", "für"],
+      answer: "auf",
+      explanation: "warten auf + accusative.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Ich denke ___ das Meeting.'",
+      options: ["an", "auf", "mit", "zu"],
+      answer: "an",
+      explanation: "denken an.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'I am looking forward to the trip.'",
+      words: ["Ich", "freue", "mich", "auf", "die", "Reise", "."],
+      answer: "Ich freue mich auf die Reise.",
+      explanation: "sich freuen auf.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Use two verb-preposition pairs.",
+      answer: "",
+      sampleAnswer: "Ich warte auf den Termin und denke an die Prüfung.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use fixed pairs.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Use verb-preposition combos naturally ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use fixed verb-preposition pairs with ${t.task.de}.`,
+      vocabulary: [
+        { german: "warten auf", english: "to wait for" },
+        { german: "denken an", english: "to think about" },
+        { german: "sich freuen auf", english: "to look forward to" },
+        { german: t.service.de, english: t.service.en },
+        { german: t.task.de, english: t.task.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Ich warte auf ${t.service.de}.`, english: `I'm waiting for ${t.service.en}.` },
+        { speaker: t.speakerB, german: `Ich denke an ${t.task.de}.`, english: `I'm thinking about ${t.task.en}.` },
+      ],
+      production: {
+        prompt: `Roleplay: Use two verb-preposition pairs ${t.place.de}.`,
+        sampleAnswer: `Ich freue mich auf ${t.service.de} und warte auf ${t.item.de}.`,
+      },
+      skillUnlock: "You can use verb-preposition combinations correctly.",
+      reviewSuggestion: "Write three verb-preposition pairs.",
+    }
+  })
+
+  return buildLessonFromContext("verbs-with-prep", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildKonjunktiv1(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Konjunktiv I is used for reported speech in formal contexts." },
+    { rule: "Example: Er sagt, er habe keine Zeit." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: report statements with Konjunktiv I.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the reported speech form.",
+      options: ["Er sagt, er habe Zeit.", "Er sagt, er hat Zeit.", "Er sagt, er hatte Zeit.", "Er sagt, er haben Zeit."],
+      answer: "Er sagt, er habe Zeit.",
+      explanation: "Konjunktiv I: habe.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Sie sagt, sie ___ krank.'",
+      options: ["sei", "ist", "war", "wäre"],
+      answer: "sei",
+      explanation: "Konjunktiv I of sein: sei.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'He says he is ready.'",
+      words: ["Er", "sagt", ",", "er", "sei", "bereit", "."],
+      answer: "Er sagt, er sei bereit.",
+      explanation: "Reported speech structure.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Report a short statement.",
+      answer: "",
+      sampleAnswer: "Sie sagt, sie habe den Bericht geschickt.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use Konjunktiv I.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Report what others said formally ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use Konjunktiv I to report statements about ${t.task.de}.`,
+      vocabulary: [
+        { german: "sagen", english: "to say" },
+        { german: "berichten", english: "to report" },
+        { german: "er habe", english: "he has (reported)" },
+        { german: t.task.de, english: t.task.en },
+        { german: t.document.de, english: t.document.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Er sagt, er habe ${t.document.de} geschickt.`, english: `He says he has sent ${t.document.en}.` },
+        { speaker: t.speakerB, german: `Gut, dann ist es erledigt.`, english: "Good, then it's done." },
+      ],
+      production: {
+        prompt: `Roleplay: Report a statement ${t.place.de}.`,
+        sampleAnswer: `Sie sagt, sie sei heute ${t.place.de}.`,
+      },
+      skillUnlock: "You can report statements in formal register.",
+      reviewSuggestion: "Rewrite one sentence in Konjunktiv I.",
+    }
+  })
+
+  return buildLessonFromContext("konjunktiv-1", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
+function buildNominalization(options: LessonOptions): LessonContent {
+  const grammarPoints: GrammarPoint[] = [
+    { rule: "Nominalization turns verbs into nouns: planen -> die Planung." },
+    { rule: "Formal style uses nouns: zur Verfügung stellen." },
+  ]
+
+  const grammarSummary: GrammarPoint = {
+    rule: "Grammar snapshot: verb -> noun for formal writing.",
+  }
+
+  const exercises: Exercise[] = [
+    {
+      kind: "multiple-choice",
+      prompt: "Choose the nominalization of 'entscheiden'.",
+      options: ["die Entscheidung", "der Entscheiden", "das Entscheiden", "die Entscheiden"],
+      answer: "die Entscheidung",
+      explanation: "Decision = die Entscheidung.",
+    },
+    {
+      kind: "fill-blank",
+      prompt: "Complete: 'Bitte schicken Sie die ___ (Bestätigen).'",
+      options: ["Bestätigung", "Bestätigen", "Bestätigt", "Bestätige"],
+      answer: "Bestätigung",
+      explanation: "Nominalization: Bestätigung.",
+    },
+    {
+      kind: "reorder",
+      prompt: "Order the sentence: 'The implementation is planned.'",
+      words: ["Die", "Umsetzung", "ist", "geplant", "."],
+      answer: "Die Umsetzung ist geplant.",
+      explanation: "Nominalized form.",
+    },
+    {
+      kind: "production",
+      prompt: "Roleplay: Write one formal sentence using a noun form.",
+      answer: "",
+      sampleAnswer: "Die Planung des Projekts beginnt morgen.",
+      mode: options.learningStyle === "speaking" ? "speaking" : "writing",
+      explanation: "Use a nominalized form.",
+    },
+  ]
+
+  const contextByPurpose = buildPurposeMap((purpose) => {
+    const t = PURPOSE_TEMPLATES[purpose]
+    return {
+      title: `Write in professional and academic style ${PURPOSE_LABELS[purpose]}`,
+      abilityObjective: `Use nominalizations to describe ${t.task.de} formally.`,
+      vocabulary: [
+        { german: "die Planung", english: "the planning" },
+        { german: "die Entscheidung", english: "the decision" },
+        { german: "die Durchführung", english: "the execution" },
+        { german: t.task.de, english: t.task.en },
+        { german: t.document.de, english: t.document.en },
+      ],
+      dialogue: [
+        { speaker: t.speakerA, german: `Die Planung des Projekts ist abgeschlossen.`, english: "The planning of the project is finished." },
+        { speaker: t.speakerB, german: `Gut, die Durchführung beginnt morgen.`, english: "Good, the execution starts tomorrow." },
+      ],
+      production: {
+        prompt: `Roleplay: Write one formal sentence about ${t.task.de}.`,
+        sampleAnswer: `Die Durchführung von ${t.task.de} beginnt morgen.`,
+      },
+      skillUnlock: "You can write in a more formal style.",
+      reviewSuggestion: "Convert one verb into a noun.",
+    }
+  })
+
+  return buildLessonFromContext("nominalization", options, contextByPurpose, grammarPoints, grammarSummary, exercises)
+}
+
 function buildLessonContent(lessonId: string, options: LessonOptions): LessonContent | null {
   switch (lessonId) {
     case "greetings-intro":
@@ -1898,13 +4277,79 @@ function buildLessonContent(lessonId: string, options: LessonOptions): LessonCon
       return buildNegation(options)
     case "question-words":
       return buildQuestionWords(options)
+    case "modal-verbs":
+      return buildModalVerbs(options)
+    case "accusative-case":
+      return buildAccusativeCase(options)
+    case "dative-case":
+      return buildDativeCase(options)
+    case "separable-verbs":
+      return buildSeparableVerbs(options)
+    case "prepositions-by-case":
+      return buildPrepositionsByCase(options)
+    case "past-perfekt":
+      return buildPastPerfekt(options)
+    case "connectors-weil-dass":
+      return buildConnectorsWeilDass(options)
+    case "reflexive-verbs":
+      return buildReflexiveVerbs(options)
+    case "possessive-articles":
+      return buildPossessiveArticles(options)
+    case "comparatives-superlatives":
+      return buildComparativesSuperlatives(options)
+    case "relative-clauses":
+      return buildRelativeClauses(options)
+    case "work-office-comm":
+      return buildWorkOfficeComm(options)
+    case "work-meetings":
+      return buildWorkMeetings(options)
+    case "travel-navigation":
+      return buildTravelNavigation(options)
+    case "travel-dining":
+      return buildTravelDining(options)
+    case "relocation-registration":
+      return buildRelocationRegistration(options)
+    case "relocation-housing":
+      return buildRelocationHousing(options)
+    case "study-university":
+      return buildStudyUniversity(options)
+    case "study-presentations":
+      return buildStudyPresentations(options)
+    case "daily-shopping":
+      return buildDailyShopping(options)
+    case "daily-health":
+      return buildDailyHealth(options)
+    case "exams-writing":
+      return buildExamsWriting(options)
+    case "exams-speaking":
+      return buildExamsSpeaking(options)
+    case "prateritum":
+      return buildPrateritum(options)
+    case "passive-voice":
+      return buildPassiveVoice(options)
+    case "konjunktiv-2":
+      return buildKonjunktiv2(options)
+    case "genitiv-case":
+      return buildGenitivCase(options)
+    case "advanced-connectors":
+      return buildAdvancedConnectors(options)
+    case "werden-forms":
+      return buildWerdenForms(options)
+    case "verbs-with-prep":
+      return buildVerbsWithPrep(options)
+    case "konjunktiv-1":
+      return buildKonjunktiv1(options)
+    case "nominalization":
+      return buildNominalization(options)
     default:
       return null
   }
 }
 
 export function getLessonContent(lessonId: string, options: LessonOptions = {}): LessonContent | null {
-  return buildLessonContent(lessonId, options)
+  const content = buildLessonContent(lessonId, options)
+  if (!content) return null
+  return ensureExamTiming(content)
 }
 
 export interface PracticeExercise {

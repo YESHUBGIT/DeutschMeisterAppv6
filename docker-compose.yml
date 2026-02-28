@@ -42,9 +42,11 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/templates:/etc/nginx/conf.d-templates:ro
+      - ./scripts/nginx-entrypoint.sh:/scripts/nginx-entrypoint.sh:ro
       - ./certbot/www:/var/www/certbot
       - ./certbot/conf:/etc/letsencrypt
+    entrypoint: ["/bin/sh", "/scripts/nginx-entrypoint.sh"]
 
   certbot:
     image: certbot/certbot:latest
